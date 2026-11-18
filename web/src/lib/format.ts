@@ -1,4 +1,4 @@
-import type { CountryProviders, Meta, Provider, Title } from './types';
+import type { CountryProviders, Meta, NewsItem, Provider, Title } from './types';
 
 export const img = (path: string | null | undefined, size: 'w92' | 'w185' | 'w342' | 'w780' | 'w1280' = 'w342') =>
   path ? `https://image.tmdb.org/t/p/${size}${path}` : null;
@@ -136,3 +136,111 @@ export const STATE_LABEL: Record<Title['state'], string> = {
   watched: 'Watched',
   dropped: 'Dropped',
 };
+
+// ───────────────────────── episode progress ─────────────────────────
+
+export interface EpisodeRef {
+  s: number;
+  e: number;
+}
+
+const seasonCounts = (t: Pick<Title, 'season_episodes'>) =>
+  Object.entries(t.season_episodes ?? {})
+    .map(([s, n]) => [Number(s), Number(n)] as const)
+    .filter(([s, n]) => s > 0 && n > 0)
+    .sort((a, b) => a[0] - b[0]);
+
+/** The aired episode after the shared progress position, or null when caught up / no data. */
+export function nextEpisode(t: Pick<Title, 'season_episodes' | 'progress_season' | 'progress_episode'>): EpisodeRef | null {
+  const counts = seasonCounts(t);
+  if (!counts.length) return null;
+  const ps = t.progress_season ?? 0;
+  const pe = t.progress_episode ?? 0;
+  for (const [s, n] of counts) {
+    if (s < ps) continue;
+    if (s === ps && pe < n) return { s, e: pe + 1 };
+    if (s > ps) return { s, e: 1 };
+  }
+  return null;
+}
+
+/** Number of aired episodes after the progress position. */
+export function unwatchedCount(t: Pick<Title, 'season_episodes' | 'progress_season' | 'progress_episode'>) {
+  const ps = t.progress_season ?? 0;
+  const pe = t.progress_episode ?? 0;
+  return seasonCounts(t).reduce((sum, [s, n]) => sum + (s < ps ? 0 : s === ps ? Math.max(0, n - pe) : n), 0);
+}
+
+export const epLabel = (r: EpisodeRef) => `S${r.s}E${r.e}`;
+
+// ───────────────────────── "new" alerts ─────────────────────────
+
+const FRESH_DAYS = 14;
+
+/** News items from the last two weeks, newest first, preferring my services and home country. */
+export function freshNews(t: Pick<Title, 'news'>, opts: { home?: string; mine?: Set<number> } = {}): NewsItem[] {
+  const cutoff = Date.now() - FRESH_DAYS * 86400000;
+  const score = (n: NewsItem) =>
+    (n.type === 'season' ? 4 : 0) +
+    (n.provider_id != null && opts.mine?.has(n.provider_id) ? 2 : 0) +
+    (n.country === opts.home ? 1 : 0);
+  return (t.news ?? [])
+    .filter((n) => Date.parse(n.at) >= cutoff)
+    .sort((a, b) => score(b) - score(a) || b.at.localeCompare(a.at));
+}
+
+export function newsLabel(n: NewsItem, home?: string) {
+  if (n.type === 'season') return `S${n.season} out`;
+  return `New on ${n.provider}${n.country && n.country !== home ? ` ${flag(n.country)}` : ''}`;
+}
+
+// ───────────────────────── calendar ─────────────────────────
+
+export interface CalendarEvent {
+  key: string;
+  date: string;
+  title: Title;
+  kind: 'release' | 'premiere' | 'episode';
+  label: string;
+}
+
+/** Upcoming dates for list titles: movie releases, season premieres and episodes. Mirrors the ICS feed. */
+export function calendarEvents(titles: Title[], country: string, fromIso: string): CalendarEvent[] {
+  const out: CalendarEvent[] = [];
+  for (const t of titles) {
+    if (t.state === 'dropped') continue;
+    if (t.media_type === 'movie') {
+      const own = t.release_dates?.[country];
+      const date = own ?? t.release_date;
+      if (date && date >= fromIso && t.state !== 'watched') {
+        out.push({ key: `${t.id}-rel`, date, title: t, kind: 'release', label: own ? `Release ${flag(country)}` : 'Release' });
+      }
+      continue;
+    }
+    const eps = t.upcoming_episodes ?? [];
+    for (const ep of eps) {
+      if (ep.date < fromIso) continue;
+      out.push({
+        key: `${t.id}-s${ep.s}e${ep.e}`,
+        date: ep.date,
+        title: t,
+        kind: ep.e === 1 ? 'premiere' : 'episode',
+        label: `${ep.e === 1 ? `Season ${ep.s} premiere · ` : ''}S${ep.s}E${ep.e}${ep.name ? ` · ${ep.name}` : ''}`,
+      });
+    }
+    const covered = eps.some((ep) => ep.s === t.next_season_number && ep.e === 1);
+    if (t.next_season_date && !covered && t.next_season_date >= fromIso) {
+      out.push({ key: `${t.id}-season`, date: t.next_season_date, title: t, kind: 'premiere', label: `Season ${t.next_season_number} premiere` });
+    }
+    if (!eps.length && !t.next_season_date && t.next_episode_date && t.next_episode_date >= fromIso) {
+      out.push({ key: `${t.id}-ep`, date: t.next_episode_date, title: t, kind: 'episode', label: 'New episode' });
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.title.title.localeCompare(b.title.title));
+}
+
+/** Today's date as YYYY-MM-DD in local time. */
+export function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}

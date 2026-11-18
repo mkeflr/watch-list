@@ -4,22 +4,24 @@ import RandomPick from './components/RandomPick';
 import TitleDetail from './components/TitleDetail';
 import { session } from './lib/session';
 import { configured, useStore } from './lib/supabase';
-import type { MediaType, Title } from './lib/types';
+import type { MediaType, Summary, Title } from './lib/types';
 import { onLocked, onToast, type Toast } from './lib/ui';
+import Calendar from './pages/Calendar';
 import Discover from './pages/Discover';
 import List from './pages/List';
 import Settings from './pages/Settings';
 
-type Page = 'list' | 'discover' | 'settings';
+type Page = 'list' | 'discover' | 'calendar' | 'settings';
 const PAGES: [Page, string, string][] = [
   ['list', 'List', '☰'],
   ['discover', 'Add', '＋'],
+  ['calendar', 'Calendar', '📅'],
   ['settings', 'Settings', '⚙'],
 ];
 
 const pageFromHash = (): Page => {
   const h = location.hash.slice(1);
-  return h === 'discover' || h === 'settings' ? h : 'list';
+  return h === 'discover' || h === 'calendar' || h === 'settings' ? h : 'list';
 };
 
 export default function App() {
@@ -53,6 +55,21 @@ function Main({ onLock }: { onLock: () => void }) {
     setPreview(null);
     setOpenId(t.id);
   }, []);
+  // Open a TMDB result: the list row if it's already added, otherwise a preview.
+  const openSummary = useCallback(
+    (s: Pick<Summary, 'media_type' | 'tmdb_id'>) => {
+      const existing = titles.find((t) => t.tmdb_id === s.tmdb_id && t.media_type === s.media_type);
+      setPicking(false);
+      if (existing) {
+        setPreview(null);
+        setOpenId(existing.id);
+      } else {
+        setOpenId(null);
+        setPreview({ media_type: s.media_type, tmdb_id: s.tmdb_id });
+      }
+    },
+    [titles],
+  );
   const closeDetail = useCallback(() => {
     setOpenId(null);
     setPreview(null);
@@ -78,7 +95,8 @@ function Main({ onLock }: { onLock: () => void }) {
       <main>
         {error && <p className="error">Couldn’t load the list: {error}</p>}
         {page === 'list' && <List titles={titles} settings={settings} theaterCountry={theaterCountry} loading={loading} onOpen={open} onDiscover={() => setPage('discover')} />}
-        {page === 'discover' && <Discover titles={titles} theaterCountry={theaterCountry} countries={settings.countries} onPreview={setPreview} />}
+        {page === 'discover' && <Discover titles={titles} theaterCountry={theaterCountry} countries={settings.countries} onPreview={openSummary} />}
+        {page === 'calendar' && <Calendar titles={titles} theaterCountry={theaterCountry} onOpen={open} />}
         {page === 'settings' && <Settings titles={titles} settings={settings} theaterCountry={theaterCountry} onLock={onLock} />}
       </main>
 
@@ -106,6 +124,8 @@ function Main({ onLock }: { onLock: () => void }) {
           settings={settings}
           theaterCountry={theaterCountry}
           onClose={closeDetail}
+          titles={titles}
+          onPreview={openSummary}
         />
       )}
       <Toasts />

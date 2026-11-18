@@ -29,7 +29,10 @@ export const db = {
     return data === true;
   },
   addTitle: (meta: Meta) => call<Title>('add_title', { meta, added_by: session.name }),
-  updateTitle: (id: string, patch: Partial<Pick<Title, 'state' | 'priority' | 'notes' | 'watched_by'>>) =>
+  updateTitle: (
+    id: string,
+    patch: Partial<Pick<Title, 'state' | 'priority' | 'notes' | 'watched_by' | 'progress_season' | 'progress_episode'>>,
+  ) =>
     call<Title>('update_title', { title_id: id, patch }),
   deleteTitle: (id: string) => call<void>('delete_title', { title_id: id }),
   updateSettings: (s: Settings) =>

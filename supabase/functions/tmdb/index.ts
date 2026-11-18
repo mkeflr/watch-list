@@ -16,7 +16,7 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-passcode",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
 type MediaType = "movie" | "tv";
@@ -171,17 +171,20 @@ function airedSeasons(d: Json) {
   const last = d.last_episode_to_air;
   let seasons = 0;
   let episodes = 0;
+  const season_episodes: Record<string, number> = {};
   if (last && last.season_number > 0) {
     seasons = last.season_number;
-    episodes = list
-      .filter((s) => s.season_number < last.season_number)
-      .reduce((sum, s) => sum + (s.episode_count ?? 0), 0) + (last.episode_number ?? 0);
+    for (const s of list) {
+      if (s.season_number < last.season_number) season_episodes[s.season_number] = s.episode_count ?? 0;
+    }
+    season_episodes[last.season_number] = last.episode_number ?? 0;
   } else if (last) {
     // Only specials have aired — fall back to seasons whose premiere is in the past.
     const aired = list.filter((s) => s.air_date && s.air_date <= now);
     seasons = aired.length;
-    episodes = aired.reduce((sum, s) => sum + (s.episode_count ?? 0), 0);
+    for (const s of aired) season_episodes[s.season_number] = s.episode_count ?? 0;
   }
+  episodes = Object.values(season_episodes).reduce((a, b) => a + b, 0);
   const next = list
     .filter((s) => s.season_number > seasons)
     .sort((a, b) => a.season_number - b.season_number)[0];
@@ -191,9 +194,59 @@ function airedSeasons(d: Json) {
   return {
     seasons,
     episodes,
+    season_episodes,
     next_season_number: next ? next.season_number : null,
     next_season_date,
   };
+}
+
+interface UpcomingEpisode {
+  s: number;
+  e: number;
+  name: string | null;
+  date: string;
+}
+
+const median = (xs: number[]) => {
+  if (!xs.length) return null;
+  const v = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(v.length / 2);
+  return Math.round(v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2);
+};
+
+/**
+ * Season-level details: typical episode runtime (median of the latest aired season, so a long
+ * finale doesn't skew it) and the dated upcoming episodes of the airing / next season.
+ */
+async function seasonData(d: Json) {
+  const now = today();
+  const lastS: number | undefined = d.last_episode_to_air?.season_number;
+  const nextS: number | undefined = d.next_episode_to_air?.season_number;
+  const wanted = [...new Set([lastS, nextS].filter((n): n is number => typeof n === "number" && n > 0))];
+  const fetched = await Promise.all(
+    wanted.map((n) => tmdb(`/tv/${d.id}/season/${n}`).catch(() => null)),
+  );
+  const byNumber = new Map<number, Json>();
+  wanted.forEach((n, i) => fetched[i] && byNumber.set(n, fetched[i]));
+
+  const runtimesOf = (season: Json | undefined, airedOnly: boolean) =>
+    (season?.episodes ?? [])
+      .filter((ep: Json) => !airedOnly || (ep.air_date && ep.air_date <= now))
+      .map((ep: Json) => Number(ep.runtime))
+      .filter((r: number) => r > 0);
+  const runtime_min = median(runtimesOf(lastS ? byNumber.get(lastS) : undefined, true)) ??
+    median(runtimesOf(nextS ? byNumber.get(nextS) : undefined, false));
+
+  const upcoming_episodes: UpcomingEpisode[] = [];
+  for (const season of byNumber.values()) {
+    for (const ep of season.episodes ?? []) {
+      if (ep.air_date && ep.air_date >= now) {
+        upcoming_episodes.push({ s: ep.season_number, e: ep.episode_number, name: ep.name || null, date: ep.air_date });
+      }
+    }
+  }
+  upcoming_episodes.sort((a, b) => a.date.localeCompare(b.date) || a.s - b.s || a.e - b.e);
+  return { runtime_min, upcoming_episodes: upcoming_episodes.slice(0, 40) };
 }
 
 /** Earliest theatrical (premiere/limited/wide), else digital, else any release date per country. */
@@ -230,6 +283,8 @@ async function details(media_type: MediaType, tmdb_id: number, countries: string
   let episodes: number | null = null;
   let next_season_number: number | null = null;
   let next_season_date: string | null = null;
+  let season_episodes: Record<string, number> = {};
+  let upcoming_episodes: UpcomingEpisode[] = [];
 
   if (media_type === "movie") {
     runtime_min = d.runtime || null;
@@ -247,7 +302,10 @@ async function details(media_type: MediaType, tmdb_id: number, countries: string
     const cr = d.content_ratings?.results ?? [];
     certification = (cr.find((x: Json) => x.iso_3166_1 === home) ?? cr.find((x: Json) => x.iso_3166_1 === "US"))
       ?.rating ?? null;
-    ({ seasons, episodes, next_season_number, next_season_date } = airedSeasons(d));
+    ({ seasons, episodes, season_episodes, next_season_number, next_season_date } = airedSeasons(d));
+    const sd = await seasonData(d);
+    if (sd.runtime_min) runtime_min = sd.runtime_min;
+    upcoming_episodes = sd.upcoming_episodes;
   }
 
   return {
@@ -270,12 +328,147 @@ async function details(media_type: MediaType, tmdb_id: number, countries: string
     episodes,
     next_season_number,
     next_season_date,
+    season_episodes,
+    upcoming_episodes,
     status_text: d.status ?? null,
     release_date,
     release_dates,
     next_episode_date: d.next_episode_to_air?.air_date ?? null,
     providers: normalizeProviders(d["watch/providers"]?.results, countries),
   };
+}
+
+// ───────────────────────── news ("new on …" alerts) ─────────────────────────
+
+interface NewsItem {
+  type: "provider" | "season";
+  country?: string;
+  provider?: string;
+  provider_id?: number;
+  season?: number;
+  at: string;
+}
+interface ExistingRow {
+  providers: Record<string, CountryProviders> | null;
+  seasons: number | null;
+  news: NewsItem[] | null;
+}
+
+const streamingOf = (cp?: CountryProviders) => [...(cp?.flatrate ?? []), ...(cp?.free ?? []), ...(cp?.ads ?? [])];
+
+/** Compare a stored row with fresh metadata and return the updated news list (last 30 days). */
+export function diffNews(
+  old: ExistingRow,
+  fresh: { providers: Record<string, CountryProviders>; seasons: number | null },
+  countries: string[],
+  nowIso = new Date().toISOString(),
+): NewsItem[] {
+  const cutoff = new Date(Date.parse(nowIso) - 30 * 86400_000).toISOString();
+  const news = (old.news ?? []).filter((n) => n.at >= cutoff);
+  const has = (pred: (n: NewsItem) => boolean) => news.some(pred);
+
+  // Only diff providers once a baseline exists, so the first refresh doesn't flag everything as new.
+  if (old.providers && Object.keys(old.providers).length) {
+    for (const cc of countries) {
+      const before = new Set(streamingOf(old.providers[cc]).map((p) => p.id));
+      for (const p of streamingOf(fresh.providers[cc])) {
+        if (before.has(p.id)) continue;
+        if (has((n) => n.type === "provider" && n.country === cc && n.provider_id === p.id)) continue;
+        news.push({ type: "provider", country: cc, provider: p.name, provider_id: p.id, at: nowIso });
+        before.add(p.id);
+      }
+    }
+  }
+  if (old.seasons != null && fresh.seasons != null && fresh.seasons > old.seasons) {
+    if (!has((n) => n.type === "season" && n.season === fresh.seasons)) {
+      news.push({ type: "season", season: fresh.seasons, at: nowIso });
+    }
+  }
+  return news;
+}
+
+// ───────────────────────── calendar (iCalendar feed) ─────────────────────────
+
+const icsEscape = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+const icsDate = (iso: string) => iso.slice(0, 10).replace(/-/g, "");
+function icsFold(line: string) {
+  // Fold at 73 chars (UTF-16 units; close enough for the 75-octet rule with mostly-ASCII text).
+  const out: string[] = [];
+  let rest = line;
+  while (rest.length > 73) {
+    out.push(rest.slice(0, 73));
+    rest = " " + rest.slice(73);
+  }
+  out.push(rest);
+  return out.join("\r\n");
+}
+function addDay(iso: string) {
+  const d = new Date(iso.slice(0, 10) + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+async function calendarFeed(country: string) {
+  const rows: Json[] = await rest(
+    "titles?select=id,title,media_type,state,release_date,release_dates,next_season_number,next_season_date," +
+      "next_episode_date,upcoming_episodes&state=neq.dropped",
+  );
+  const from = new Date(Date.now() - 60 * 86400_000).toISOString().slice(0, 10);
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
+  const events: { uid: string; date: string; summary: string }[] = [];
+  for (const t of rows) {
+    if (t.media_type === "movie") {
+      const date = t.release_dates?.[country] ?? t.release_date;
+      if (date && date >= from && t.state !== "watched") {
+        events.push({ uid: `${t.id}-release`, date, summary: `🎬 ${t.title} — release` });
+      }
+      continue;
+    }
+    const eps: UpcomingEpisode[] = t.upcoming_episodes ?? [];
+    for (const ep of eps) {
+      const premiere = ep.e === 1;
+      events.push({
+        uid: `${t.id}-s${ep.s}e${ep.e}`,
+        date: ep.date,
+        summary: `📺 ${t.title} S${ep.s}E${ep.e}${premiere ? " — season premiere" : ""}${ep.name ? ` · ${ep.name}` : ""}`,
+      });
+    }
+    const coveredPremiere = eps.some((ep) => ep.s === t.next_season_number && ep.e === 1);
+    if (t.next_season_date && !coveredPremiere && t.next_season_date >= from) {
+      events.push({
+        uid: `${t.id}-season${t.next_season_number}`,
+        date: t.next_season_date,
+        summary: `📺 ${t.title} — season ${t.next_season_number} premiere`,
+      });
+    }
+    if (!eps.length && t.next_episode_date && t.next_episode_date >= from && !t.next_season_date) {
+      events.push({ uid: `${t.id}-next-ep`, date: t.next_episode_date, summary: `📺 ${t.title} — new episode` });
+    }
+  }
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Watchlist//Release calendar//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "X-WR-CALNAME:Watchlist releases",
+    "REFRESH-INTERVAL;VALUE=DURATION:PT12H",
+    "X-PUBLISHED-TTL:PT12H",
+  ];
+  for (const ev of events) {
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${ev.uid}@watchlist`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${icsDate(ev.date)}`,
+      `DTEND;VALUE=DATE:${icsDate(addDay(ev.date))}`,
+      icsFold(`SUMMARY:${icsEscape(ev.summary)}`),
+      "TRANSP:TRANSPARENT",
+      "END:VEVENT",
+    );
+  }
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n") + "\r\n";
 }
 
 // ───────────────────────── actions ─────────────────────────
@@ -323,6 +516,25 @@ async function handle(body: Json, passcode: string) {
       };
     }
 
+    case "recommendations": {
+      const items: { media_type: MediaType; tmdb_id: number }[] = (body.items ?? []).slice(0, 4);
+      return {
+        results: await Promise.all(
+          items.map(async ({ media_type, tmdb_id }) => {
+            const type: MediaType = media_type === "tv" ? "tv" : "movie";
+            const d = await tmdb(`/${type}/${Number(tmdb_id)}/recommendations`).catch(() => ({ results: [] }));
+            return {
+              media_type: type,
+              tmdb_id: Number(tmdb_id),
+              results: (d.results ?? [])
+                .filter((r: Json) => !r.media_type || r.media_type === "movie" || r.media_type === "tv")
+                .map((r: Json) => summarize(r, r.media_type ?? type)),
+            };
+          }),
+        ),
+      };
+    }
+
     case "refresh": {
       // Re-enrich titles whose metadata is older than `max_age_days` (default 7),
       // or a single title when `id` is given.
@@ -334,14 +546,15 @@ async function handle(body: Json, passcode: string) {
         : `metadata_refreshed_at=lt.${encodeURIComponent(cutoff)}&order=metadata_refreshed_at.asc&limit=${
           Math.min(Number(body.limit ?? 40), 100)
         }`;
-      const rows: { id: string; tmdb_id: number; media_type: MediaType }[] = await rest(
-        `titles?select=id,tmdb_id,media_type&${filter}`,
+      const rows: ({ id: string; tmdb_id: number; media_type: MediaType } & ExistingRow)[] = await rest(
+        `titles?select=id,tmdb_id,media_type,providers,seasons,news&${filter}`,
       );
       let refreshed = 0;
       const errors: string[] = [];
       for (const row of rows) {
         try {
-          const meta = await details(row.media_type, row.tmdb_id, countries, home_country);
+          const fresh = await details(row.media_type, row.tmdb_id, countries, home_country);
+          const meta = { ...fresh, news: diffNews(row, fresh, countries) };
           await rpc("refresh_title_metadata", { passcode, title_id: row.id, meta });
           refreshed++;
         } catch (e) {
@@ -358,6 +571,26 @@ async function handle(body: Json, passcode: string) {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  if (req.method === "GET") {
+    // Public iCalendar feed for calendar-app subscriptions (list data is already publicly readable).
+    const url = new URL(req.url);
+    if (url.searchParams.get("calendar") !== "ics") return json({ error: "not found" }, 404);
+    const cc = (url.searchParams.get("country") ?? "").toUpperCase();
+    try {
+      const country = /^[A-Z]{2}$/.test(cc) ? cc : (await getSettings()).home_country;
+      return new Response(await calendarFeed(country), {
+        headers: {
+          ...cors,
+          "Content-Type": "text/calendar; charset=utf-8",
+          "Content-Disposition": 'inline; filename="watchlist.ics"',
+          "Cache-Control": "public, max-age=1800",
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      return json({ error: (e as Error).message }, 500);
+    }
+  }
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
   try {
     const passcode = req.headers.get("x-passcode") ?? "";

@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
+import Rail from '../components/Rail';
 import TitleCard from '../components/TitleCard';
-import { daysUntil, mergeProviders, providerIn, releaseDateFor, streamingIds, streamingProviders } from '../lib/format';
+import { setProgress } from '../lib/actions';
+import { daysUntil, epLabel, freshNews, mergeProviders, nextEpisode, providerIn, releaseDateFor, streamingIds, streamingProviders } from '../lib/format';
 import { session } from '../lib/session';
 import type { Provider, Settings, Title, WatchState } from '../lib/types';
 
@@ -85,6 +87,24 @@ export default function List({ titles, settings, theaterCountry, loading, onOpen
     return list.sort(tab === 'upcoming' && sort === 'priority' ? by.release : by[sort]);
   }, [titles, tab, q, type, service, genre, sort, home, myServices, theaterCountry, allProviders]);
 
+  // "Up next": watching shows with aired, unwatched episodes (most recently touched first).
+  const upNext = useMemo(
+    () =>
+      titles
+        .filter((t) => t.media_type === 'tv' && t.state === 'watching' && nextEpisode(t))
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+    [titles],
+  );
+  // "New": titles that just arrived on a service or got a new season.
+  const fresh = useMemo(
+    () =>
+      titles
+        .filter((t) => t.state !== 'watched' && t.state !== 'dropped' && freshNews(t).length)
+        .sort((a, b) => freshNews(b)[0].at.localeCompare(freshNews(a)[0].at)),
+    [titles],
+  );
+  const showRails = !q.trim() && tab === 'want';
+
   const activeFilters = [type !== 'any', service !== 'any', genre !== 'any'].filter(Boolean).length;
 
   return (
@@ -149,6 +169,42 @@ export default function List({ titles, settings, theaterCountry, loading, onOpen
         </div>
       )}
 
+      {showRails && !loading && (
+        <>
+          <Rail
+            title="▶ Up next"
+            items={upNext}
+            render={(t) => {
+              const next = nextEpisode(t)!;
+              return (
+                <TitleCard
+                  key={t.id}
+                  item={t}
+                  homeCountry={home}
+                  myServices={myServices}
+                  onOpen={() => onOpen(t)}
+                  footer={
+                    <button className="btn small-btn" onClick={() => setProgress(t, next.s, next.e)}>
+                      ✓ {epLabel(next)}
+                    </button>
+                  }
+                />
+              );
+            }}
+          />
+          {(
+            <Rail
+              title="🆕 New"
+              items={fresh}
+              render={(t) => (
+                <TitleCard key={t.id} item={t} homeCountry={home} myServices={myServices} onOpen={() => onOpen(t)} />
+              )}
+            />
+          )}
+          {(upNext.length > 0 || fresh.length > 0) && <h2 className="rail-title">To watch</h2>}
+        </>
+      )}
+
       {loading ? (
         <p className="empty muted">Loading…</p>
       ) : shown.length === 0 ? (
@@ -159,12 +215,31 @@ export default function List({ titles, settings, theaterCountry, loading, onOpen
       ) : (
         <div className="grid">
           {shown.map((t) => (
-            <TitleCard key={t.id} item={t} homeCountry={home} theaterCountry={theaterCountry} myServices={myServices} onOpen={() => onOpen(t)} />
+            <TitleCard
+              key={t.id}
+              item={t}
+              homeCountry={home}
+              theaterCountry={theaterCountry}
+              myServices={myServices}
+              onOpen={() => onOpen(t)}
+              footer={nextButton(t)}
+            />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+/** One-tap "✓ S2E6" for shows being watched that have an aired, unwatched episode. */
+function nextButton(t: Title) {
+  if (t.media_type !== 'tv' || t.state !== 'watching') return undefined;
+  const next = nextEpisode(t);
+  return next ? (
+    <button className="btn small-btn" onClick={() => setProgress(t, next.s, next.e)}>
+      ✓ {epLabel(next)}
+    </button>
+  ) : undefined;
 }
 
 function isUpcoming(t: Title, cc: string) {

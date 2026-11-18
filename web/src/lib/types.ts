@@ -32,6 +32,22 @@ export interface Summary {
 }
 
 /** Full normalized metadata from the `tmdb` edge function. */
+export interface UpcomingEpisode {
+  s: number;
+  e: number;
+  name: string | null;
+  date: string;
+}
+
+export interface NewsItem {
+  type: 'provider' | 'season';
+  country?: string;
+  provider?: string;
+  provider_id?: number;
+  season?: number;
+  at: string;
+}
+
 export interface Meta extends Summary {
   tagline: string | null;
   genres: string[];
@@ -48,6 +64,10 @@ export interface Meta extends Summary {
   next_season_date?: string | null;
   /** Movies: release date per country (theatrical first, else digital). */
   release_dates?: Record<string, string>;
+  /** TV: aired episode count per season, e.g. {"1": 9, "2": 10}. */
+  season_episodes?: Record<string, number>;
+  /** TV: dated upcoming episodes of the airing / next season. */
+  upcoming_episodes?: UpcomingEpisode[];
   status_text: string | null;
   next_episode_date: string | null;
   providers: Record<string, CountryProviders>;
@@ -61,6 +81,10 @@ export interface Title extends Meta {
   notes: string;
   added_by: string;
   watched_by: string[];
+  /** Shared episode progress: last watched episode. */
+  progress_season?: number | null;
+  progress_episode?: number | null;
+  news?: NewsItem[];
   added_at: string;
   updated_at: string;
   metadata_refreshed_at: string;
@@ -69,6 +93,12 @@ export interface Title extends Meta {
 export interface Settings {
   countries: string[];
   home_country: string;
+}
+
+export interface Recommendation {
+  media_type: MediaType;
+  tmdb_id: number;
+  results: Summary[];
 }
 
 export interface DiscoverData {

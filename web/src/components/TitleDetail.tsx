@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import {
-  countryName, daysUntil, flag, fmtDate, img, inDays, mergeProviders, nextSeasonNote, releaseDateFor, runtime,
-  sortCountries, STATE_LABEL,
+  countryName, daysUntil, flag, fmtDate, freshNews, img, inDays, mergeProviders, newsLabel, nextSeasonNote,
+  releaseDateFor, runtime, sortCountries, STATE_LABEL,
 } from '../lib/format';
 import { session } from '../lib/session';
 import { db, removeLocal, upsertLocal } from '../lib/supabase';
-import type { CountryProviders, MediaType, Meta, Provider, Settings, Title, WatchState } from '../lib/types';
+import type { CountryProviders, MediaType, Meta, Provider, Settings, Summary, Title, WatchState } from '../lib/types';
 import { handleError, toast } from '../lib/ui';
+import MoreLikeThis from './MoreLikeThis';
 import Poster from './Poster';
+import ProgressControl from './ProgressControl';
 
 interface Props {
   /** Either an existing list row… */
@@ -19,9 +21,13 @@ interface Props {
   theaterCountry: string;
   onClose: () => void;
   existing?: Title;
+  /** All list titles (for “already added” state in recommendations). */
+  titles: Title[];
+  /** Open another title (from “More like this”). */
+  onPreview: (s: Summary) => void;
 }
 
-export default function TitleDetail({ title, preview, settings, theaterCountry, onClose, existing }: Props) {
+export default function TitleDetail({ title, preview, settings, theaterCountry, onClose, existing, titles, onPreview }: Props) {
   const [meta, setMeta] = useState<Meta | null>(title ?? null);
   const [notes, setNotes] = useState(title?.notes ?? '');
   const [busy, setBusy] = useState(false);
@@ -164,6 +170,12 @@ export default function TitleDetail({ title, preview, settings, theaterCountry, 
                   <p className="muted small">No {countryName(theaterCountry)} date yet — showing the main release date.</p>
                 )}
                 {seasonNote && <p className="upcoming-note">🆕 {seasonNote}</p>}
+                {title &&
+                  freshNews(title, { home: settings.home_country }).map((n) => (
+                    <p key={`${n.type}-${n.country}-${n.provider_id}-${n.season}`} className="upcoming-note news">
+                      ✨ {newsLabel(n, settings.home_country)} · {fmtDate(n.at.slice(0, 10))}
+                    </p>
+                  ))}
                 {meta.media_type === 'tv' && epDays != null && epDays >= 0 && (
                   <p className="upcoming-note">📺 Next episode {inDays(epDays)} ({fmtDate(meta.next_episode_date!)})</p>
                 )}
@@ -185,6 +197,7 @@ export default function TitleDetail({ title, preview, settings, theaterCountry, 
 
             {title && (
               <section className="list-controls">
+                {title.media_type === 'tv' && <ProgressControl title={title} />}
                 <div className="segmented" role="group" aria-label="Status">
                   {(Object.keys(STATE_LABEL) as WatchState[]).map((s) => (
                     <button key={s} className={title.state === s ? 'on' : ''} onClick={() => patch({ state: s })} disabled={busy}>
@@ -229,6 +242,13 @@ export default function TitleDetail({ title, preview, settings, theaterCountry, 
               ))}
               <p className="muted small">Streaming data by JustWatch.</p>
             </section>
+
+            <MoreLikeThis
+              seed={{ media_type: meta.media_type, tmdb_id: meta.tmdb_id }}
+              titles={titles}
+              theaterCountry={theaterCountry}
+              onPreview={onPreview}
+            />
 
             {title && (
               <div className="actions end">
