@@ -1,0 +1,6 @@
+# Minimal Supabase CLI config. `supabase init` can regenerate a full one.
+project_id = "watch-list"
+
+[functions.tmdb]
+# The function enforces its own shared-passcode auth (x-passcode header).
+verify_jwt = false

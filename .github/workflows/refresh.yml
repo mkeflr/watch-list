@@ -1,0 +1,25 @@
+# Daily: re-fetch details for titles older than 3 days
+# (season counts, next-episode dates, streaming availability, ratings).
+# Needs repo variables VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY and secret WATCHLIST_PASSCODE.
+name: Refresh title metadata
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call tmdb edge function
+        env:
+          URL: ${{ vars.VITE_SUPABASE_URL }}
+          KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          PASSCODE: ${{ secrets.WATCHLIST_PASSCODE }}
+        run: |
+          curl --fail-with-body -sS -X POST "$URL/functions/v1/tmdb" \
+            -H "Content-Type: application/json" \
+            -H "apikey: $KEY" \
+            -H "x-passcode: $PASSCODE" \
+            -d '{"action":"refresh","max_age_days":3,"limit":100}'
