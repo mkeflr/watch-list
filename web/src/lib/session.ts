@@ -17,6 +17,19 @@ function write(key: string, value: unknown) {
   }
 }
 
+/** Country from the browser's language settings, e.g. en-GB → GB. */
+export function detectCountry(): string | null {
+  try {
+    for (const lang of navigator.languages ?? [navigator.language]) {
+      const region = new Intl.Locale(lang).maximize().region;
+      if (region && /^[A-Z]{2}$/.test(region)) return region;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 export const session = {
   get passcode() {
     return read<string | null>('wl.passcode', null);
@@ -29,6 +42,13 @@ export const session = {
   },
   set name(v: string) {
     write('wl.name', v);
+  },
+  /** Country used for theater rows and movie release dates on this device. */
+  get theaterCountry() {
+    return read<string | null>('wl.theater', null);
+  },
+  set theaterCountry(v: string | null) {
+    write('wl.theater', v);
   },
   /** Provider ids this person subscribes to. */
   get myServices() {

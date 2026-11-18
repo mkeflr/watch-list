@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { daysUntil, img, runtime, streamingIds, streamingProviders, upcomingBadge } from '../lib/format';
+import { daysUntil, img, releaseDateFor, runtime, streamingIds, streamingProviders, upcomingBadge } from '../lib/format';
 import { session } from '../lib/session';
 import { db, upsertLocal } from '../lib/supabase';
 import type { MediaType, Settings, Title } from '../lib/types';
@@ -12,13 +12,14 @@ type Where = 'any' | 'mine' | 'home' | 'countries';
 interface Props {
   titles: Title[];
   settings: Settings;
+  theaterCountry: string;
   onClose: () => void;
   onOpen: (t: Title) => void;
 }
 
 const RUNTIMES = [0, 30, 60, 90, 120, 150];
 
-export default function RandomPick({ titles, settings, onClose, onOpen }: Props) {
+export default function RandomPick({ titles, settings, theaterCountry, onClose, onOpen }: Props) {
   const [type, setType] = useState<'any' | MediaType>('any');
   const [maxRuntime, setMaxRuntime] = useState(0);
   const [where, setWhere] = useState<Where>(session.myServices.length ? 'mine' : 'any');
@@ -38,8 +39,9 @@ export default function RandomPick({ titles, settings, onClose, onOpen }: Props)
         if (type !== 'any' && t.media_type !== type) return false;
         if (maxRuntime && (!t.runtime_min || t.runtime_min > maxRuntime)) return false;
         if (!includeUnreleased) {
-          const d = daysUntil(t.release_date);
+          const d = daysUntil(t.media_type === 'movie' ? releaseDateFor(t, theaterCountry) : t.release_date);
           if (d != null && d > 0) return false;
+          if (t.media_type === 'tv' && t.seasons === 0) return false;
         }
         if (where === 'home' && streamingProviders(t.providers?.[settings.home_country]).length === 0) return false;
         if (where === 'countries' && streamingIds(t, settings.countries).size === 0) return false;
@@ -49,7 +51,7 @@ export default function RandomPick({ titles, settings, onClose, onOpen }: Props)
         }
         return true;
       }),
-    [titles, type, maxRuntime, where, includeWatching, includeUnreleased, settings, myServices],
+    [titles, type, maxRuntime, where, includeWatching, includeUnreleased, settings, myServices, theaterCountry],
   );
 
   function weightedPick(exclude?: Title | null): Title | null {
@@ -128,7 +130,7 @@ export default function RandomPick({ titles, settings, onClose, onOpen }: Props)
           <label className="inline">
             Streaming on
             <select value={where} onChange={(e) => setWhere(e.target.value as Where)}>
-              <option value="any">Anything (incl. not streaming)</option>
+              <option value="any">Anything</option>
               <option value="mine" disabled={!myServices.size}>My services{myServices.size ? '' : ' (set in Settings)'}</option>
               <option value="home">Any service in {settings.home_country}</option>
               <option value="countries">Any service in my countries</option>
@@ -159,7 +161,7 @@ export default function RandomPick({ titles, settings, onClose, onOpen }: Props)
                       {shown.runtime_min ? ` · ${runtime(shown.runtime_min)}${shown.media_type === 'tv' ? '/ep' : ''}` : ''}
                       {shown.tmdb_rating ? ` · ★ ${shown.tmdb_rating.toFixed(1)}` : ''}
                     </p>
-                    {upcomingBadge(shown) && <p className="small">{upcomingBadge(shown)}</p>}
+                    {upcomingBadge(shown, theaterCountry) && <p className="small">{upcomingBadge(shown, theaterCountry)}</p>}
                     <ProviderLogos providers={streamingProviders(shown.providers?.[settings.home_country])} max={6} mine={myServices} />
                     <p className="overview clamp">{shown.overview}</p>
                   </>

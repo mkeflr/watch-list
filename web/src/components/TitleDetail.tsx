@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import {
-  countryName, daysUntil, flag, img, inDays, runtime, sortCountries, STATE_LABEL,
+  countryName, daysUntil, flag, fmtDate, img, inDays, mergeProviders, nextSeasonNote, releaseDateFor, runtime,
+  sortCountries, STATE_LABEL,
 } from '../lib/format';
 import { session } from '../lib/session';
 import { db, removeLocal, upsertLocal } from '../lib/supabase';
@@ -15,11 +16,12 @@ interface Props {
   /** …or a TMDB id to preview before adding. */
   preview?: { media_type: MediaType; tmdb_id: number };
   settings: Settings;
+  theaterCountry: string;
   onClose: () => void;
   existing?: Title;
 }
 
-export default function TitleDetail({ title, preview, settings, onClose, existing }: Props) {
+export default function TitleDetail({ title, preview, settings, theaterCountry, onClose, existing }: Props) {
   const [meta, setMeta] = useState<Meta | null>(title ?? null);
   const [notes, setNotes] = useState(title?.notes ?? '');
   const [busy, setBusy] = useState(false);
@@ -103,7 +105,10 @@ export default function TitleDetail({ title, preview, settings, onClose, existin
     title &&
     patch({ watched_by: iWatched ? title.watched_by.filter((n) => n !== me) : [...title.watched_by, me] });
 
-  const relDays = daysUntil(meta?.release_date);
+  const ownRelease = meta?.media_type === 'movie' ? meta.release_dates?.[theaterCountry] : undefined;
+  const relDate = meta ? (meta.media_type === 'movie' ? releaseDateFor(meta, theaterCountry) : meta.release_date) : null;
+  const relDays = daysUntil(relDate);
+  const seasonNote = meta ? nextSeasonNote(meta) : null;
   const epDays = daysUntil(meta?.next_episode_date);
   const countries = sortCountries(settings.countries, settings.home_country);
 
@@ -132,9 +137,11 @@ export default function TitleDetail({ title, preview, settings, onClose, existin
                   {meta.certification && <span className="chip">{meta.certification}</span>}
                   {meta.media_type === 'movie' && meta.runtime_min && <span className="chip">{runtime(meta.runtime_min)}</span>}
                   {meta.media_type === 'tv' && meta.seasons != null && (
-                    <span className="chip">{meta.seasons} season{meta.seasons === 1 ? '' : 's'}</span>
+                    <span className="chip">
+                      {meta.seasons === 0 ? 'Not aired yet' : `${meta.seasons} season${meta.seasons === 1 ? '' : 's'}`}
+                    </span>
                   )}
-                  {meta.media_type === 'tv' && meta.episodes != null && <span className="chip">{meta.episodes} episodes</span>}
+                  {meta.media_type === 'tv' && !!meta.episodes && <span className="chip">{meta.episodes} episodes</span>}
                   {meta.media_type === 'tv' && meta.runtime_min && <span className="chip">~{runtime(meta.runtime_min)}/ep</span>}
                   {meta.status_text && <span className="chip">{meta.status_text}</span>}
                 </div>
@@ -147,11 +154,18 @@ export default function TitleDetail({ title, preview, settings, onClose, existin
                   ) : null}
                   {meta.rt_rating != null && <span><b>🍅 {meta.rt_rating}%</b> RT</span>}
                 </div>
-                {relDays != null && relDays >= 0 && (
-                  <p className="upcoming-note">📅 Releases {inDays(relDays)} ({meta.release_date})</p>
+                {relDate && relDays != null && relDays >= 0 && (
+                  <p className="upcoming-note">
+                    📅 {meta.media_type === 'tv' ? 'Premieres' : 'Releases'}
+                    {ownRelease ? ` in ${flag(theaterCountry)} ${countryName(theaterCountry)}` : ''} {inDays(relDays)} ({fmtDate(relDate)})
+                  </p>
                 )}
+                {meta.media_type === 'movie' && !ownRelease && Object.keys(meta.release_dates ?? {}).length > 0 && relDays != null && relDays >= 0 && (
+                  <p className="muted small">No {countryName(theaterCountry)} date yet — showing the main release date.</p>
+                )}
+                {seasonNote && <p className="upcoming-note">🆕 {seasonNote}</p>}
                 {meta.media_type === 'tv' && epDays != null && epDays >= 0 && (
-                  <p className="upcoming-note">📺 Next episode {inDays(epDays)} ({meta.next_episode_date})</p>
+                  <p className="upcoming-note">📺 Next episode {inDays(epDays)} ({fmtDate(meta.next_episode_date!)})</p>
                 )}
               </div>
             </div>
@@ -230,11 +244,11 @@ export default function TitleDetail({ title, preview, settings, onClose, existin
 }
 
 function CountryRow({ cc, cp, home }: { cc: string; cp?: CountryProviders; home: boolean }) {
-  const groups: [string, Provider[] | undefined][] = [
-    ['Stream', cp?.flatrate],
-    ['Free', [...(cp?.free ?? []), ...(cp?.ads ?? [])]],
-    ['Rent', cp?.rent],
-    ['Buy', cp?.buy],
+  const groups: [string, Provider[]][] = [
+    ['Stream', mergeProviders(cp?.flatrate ?? [])],
+    ['Free', mergeProviders([...(cp?.free ?? []), ...(cp?.ads ?? [])])],
+    ['Rent', mergeProviders(cp?.rent ?? [])],
+    ['Buy', mergeProviders(cp?.buy ?? [])],
   ];
   const any = groups.some(([, l]) => l?.length);
   return (

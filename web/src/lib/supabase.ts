@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
-import { session } from './session';
+import { detectCountry, session } from './session';
 import type { Meta, Settings, Title } from './types';
 
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -44,6 +44,7 @@ const state = {
   settings: { countries: ['US'], home_country: 'US' } as Settings,
   loading: true,
   error: null as string | null,
+  theaterCountry: session.theaterCountry ?? detectCountry(),
 };
 const listeners = new Set<Listener>();
 let version = 0;
@@ -60,6 +61,13 @@ export function removeLocal(id: string) {
   state.titles.delete(id);
   emit();
 }
+/** Per-device country for theater rows and movie release dates. */
+export function setTheaterCountry(cc: string) {
+  session.theaterCountry = cc;
+  state.theaterCountry = cc;
+  emit();
+}
+
 export function setSettingsLocal(s: Settings) {
   state.settings = s;
   emit();
@@ -115,6 +123,7 @@ export function useStore() {
     settings: state.settings,
     loading: state.loading,
     error: state.error,
+    theaterCountry: state.theaterCountry ?? state.settings.home_country,
     reload: load,
   };
 }

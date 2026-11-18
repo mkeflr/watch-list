@@ -6,21 +6,24 @@ import ProviderLogos from './ProviderLogos';
 interface Props {
   item: Title | Summary;
   homeCountry?: string;
+  theaterCountry?: string;
   myServices?: Set<number>;
   onOpen: () => void;
   onAdd?: () => void;
   added?: boolean;
 }
 
-export default function TitleCard({ item, homeCountry, myServices, onOpen, onAdd, added }: Props) {
+export default function TitleCard({ item, homeCountry, theaterCountry, myServices, onOpen, onAdd, added }: Props) {
   const full = 'id' in item ? (item as Title) : null;
-  const badge = full ? upcomingBadge(full) : upcomingBadge({ ...item, next_episode_date: null });
+  const badge = upcomingBadge(full ?? { ...item, next_episode_date: null }, theaterCountry);
   const providers = full && homeCountry ? streamingProviders(full.providers?.[homeCountry]) : [];
   const detail = full
     ? full.media_type === 'tv'
-      ? [full.seasons && `${full.seasons} season${full.seasons > 1 ? 's' : ''}`, full.episodes && `${full.episodes} eps`]
-          .filter(Boolean)
-          .join(' · ')
+      ? full.seasons
+        ? `${full.seasons} season${full.seasons > 1 ? 's' : ''}${full.episodes ? ` · ${full.episodes} eps` : ''}`
+        : full.seasons === 0
+          ? 'Not aired yet'
+          : null
       : runtime(full.runtime_min)
     : null;
 

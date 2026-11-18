@@ -5,6 +5,8 @@ export interface Provider {
   id: number;
   name: string;
   logo: string | null;
+  /** All provider ids merged into this entry (e.g. "HBO Max" + "HBO Max Amazon Channel"). */
+  ids?: number[];
 }
 
 export interface CountryProviders {
@@ -39,8 +41,13 @@ export interface Meta extends Summary {
   rt_rating: number | null;
   certification: string | null;
   runtime_min: number | null;
+  /** Aired seasons / episodes only. */
   seasons: number | null;
   episodes: number | null;
+  next_season_number?: number | null;
+  next_season_date?: string | null;
+  /** Movies: release date per country (theatrical first, else digital). */
+  release_dates?: Record<string, string>;
   status_text: string | null;
   next_episode_date: string | null;
   providers: Record<string, CountryProviders>;
@@ -65,6 +72,7 @@ export interface Settings {
 }
 
 export interface DiscoverData {
+  region?: string;
   upcoming: Summary[];
   now_playing: Summary[];
   on_the_air: Summary[];

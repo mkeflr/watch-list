@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
-import { COMMON_COUNTRIES, countryName, flag, img, streamingProviders } from '../lib/format';
+import { COMMON_COUNTRIES, countryName, flag, img, mergeProviders, providerIn, streamingProviders } from '../lib/format';
 import { session } from '../lib/session';
-import { db, setSettingsLocal } from '../lib/supabase';
+import { db, setSettingsLocal, setTheaterCountry } from '../lib/supabase';
 import type { Provider, Settings as S, Title } from '../lib/types';
 import { handleError, toast } from '../lib/ui';
 
 interface Props {
   titles: Title[];
   settings: S;
+  theaterCountry: string;
   onLock: () => void;
 }
 
-export default function Settings({ titles, settings, onLock }: Props) {
+export default function Settings({ titles, settings, theaterCountry, onLock }: Props) {
   const [name, setName] = useState(session.name);
   const [countries, setCountries] = useState(settings.countries);
   const [home, setHome] = useState(settings.home_country);
@@ -27,9 +28,9 @@ export default function Settings({ titles, settings, onLock }: Props) {
 
   // Every streaming service seen on the list, across the configured countries.
   const providers = useMemo(() => {
-    const m = new Map<number, Provider>();
-    for (const t of titles) for (const cc of settings.countries) for (const p of streamingProviders(t.providers?.[cc])) m.set(p.id, p);
-    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const all: Provider[] = [];
+    for (const t of titles) for (const cc of settings.countries) all.push(...streamingProviders(t.providers?.[cc]));
+    return mergeProviders(all).sort((a, b) => a.name.localeCompare(b.name));
   }, [titles, settings.countries]);
 
   const options = [...new Set([...COMMON_COUNTRIES, ...countries])];
@@ -66,10 +67,11 @@ export default function Settings({ titles, settings, onLock }: Props) {
     }
   }
 
-  function toggleService(id: number) {
+  function toggleService(p: Provider) {
     const n = new Set(mine);
-    if (n.has(id)) n.delete(id);
-    else n.add(id);
+    const ids = p.ids ?? [p.id];
+    if (providerIn(p, n)) ids.forEach((id) => n.delete(id));
+    else ids.forEach((id) => n.add(id));
     setMine(n);
     session.myServices = [...n];
   }
@@ -92,13 +94,28 @@ export default function Settings({ titles, settings, onLock }: Props) {
         ) : (
           <div className="service-grid">
             {providers.map((p) => (
-              <button key={p.id} className={`service ${mine.has(p.id) ? 'on' : ''}`} onClick={() => toggleService(p.id)} aria-pressed={mine.has(p.id)}>
+              <button key={p.id} className={`service ${providerIn(p, mine) ? 'on' : ''}`} onClick={() => toggleService(p)} aria-pressed={providerIn(p, mine)}>
                 {p.logo && <img src={img(p.logo, 'w92') ?? ''} alt="" />}
                 <span>{p.name}</span>
               </button>
             ))}
           </div>
         )}
+      </section>
+
+      <section>
+        <h2>Theater country</h2>
+        <p className="muted small">Saved on this device. Used for “Coming soon / In theaters” and movie release dates.</p>
+        <label className="inline">
+          Theaters in
+          <select value={theaterCountry} onChange={(e) => setTheaterCountry(e.target.value)}>
+            {[...new Set([theaterCountry, ...settings.countries, ...COMMON_COUNTRIES])]
+              .sort((a, b) => countryName(a).localeCompare(countryName(b)))
+              .map((cc) => (
+                <option key={cc} value={cc}>{flag(cc)} {countryName(cc)}</option>
+              ))}
+          </select>
+        </label>
       </section>
 
       <section>

@@ -32,7 +32,7 @@ export default function App() {
 }
 
 function Main({ onLock }: { onLock: () => void }) {
-  const { titles, settings, loading, error } = useStore();
+  const { titles, settings, theaterCountry, loading, error } = useStore();
   const [page, setPageState] = useState<Page>(pageFromHash);
   const [openId, setOpenId] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ media_type: MediaType; tmdb_id: number } | null>(null);
@@ -77,9 +77,9 @@ function Main({ onLock }: { onLock: () => void }) {
 
       <main>
         {error && <p className="error">Couldn’t load the list: {error}</p>}
-        {page === 'list' && <List titles={titles} settings={settings} loading={loading} onOpen={open} onDiscover={() => setPage('discover')} />}
-        {page === 'discover' && <Discover titles={titles} onPreview={setPreview} />}
-        {page === 'settings' && <Settings titles={titles} settings={settings} onLock={onLock} />}
+        {page === 'list' && <List titles={titles} settings={settings} theaterCountry={theaterCountry} loading={loading} onOpen={open} onDiscover={() => setPage('discover')} />}
+        {page === 'discover' && <Discover titles={titles} theaterCountry={theaterCountry} countries={settings.countries} onPreview={setPreview} />}
+        {page === 'settings' && <Settings titles={titles} settings={settings} theaterCountry={theaterCountry} onLock={onLock} />}
       </main>
 
       <nav className="bottomnav">
@@ -96,7 +96,7 @@ function Main({ onLock }: { onLock: () => void }) {
         ))}
       </nav>
 
-      {picking && <RandomPick titles={titles} settings={settings} onClose={() => setPicking(false)} onOpen={open} />}
+      {picking && <RandomPick titles={titles} settings={settings} theaterCountry={theaterCountry} onClose={() => setPicking(false)} onOpen={open} />}
       {(openTitle || preview) && (
         <TitleDetail
           key={openTitle?.id ?? `${preview!.media_type}:${preview!.tmdb_id}`}
@@ -104,6 +104,7 @@ function Main({ onLock }: { onLock: () => void }) {
           preview={openTitle ? undefined : preview!}
           existing={existingForPreview}
           settings={settings}
+          theaterCountry={theaterCountry}
           onClose={closeDetail}
         />
       )}

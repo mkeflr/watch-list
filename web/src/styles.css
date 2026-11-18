@@ -16,7 +16,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--text); }
+html, body { margin: 0; background: var(--bg); color: var(--text); overflow-x: hidden; overflow-x: clip; }
 body {
   font: 15px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -43,12 +43,16 @@ input, select, textarea {
   padding: 10px 12px;
   width: 100%;
   min-height: 42px;
+  min-width: 0;
+  max-width: 100%;
+  /* ≥16px stops iOS Safari from zooming (and panning sideways) when a field is focused. */
+  font-size: 16px;
 }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 textarea { resize: vertical; }
 label { display: grid; gap: 6px; font-size: 0.88rem; color: var(--muted); }
-label.inline { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-label.inline select { width: auto; min-width: 0; }
+label.inline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+label.inline select { width: auto; flex: 1 1 auto; min-width: 0; }
 label.check { display: flex; align-items: center; gap: 8px; color: var(--text); }
 label.check input { width: 18px; min-height: 18px; accent-color: var(--accent); }
 
@@ -97,6 +101,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 12px var(--gutter); }
 
 .bottomnav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  width: 100%; transform: translateZ(0);
   display: grid; grid-template-columns: 1fr 1fr 80px 1fr;
   align-items: center;
   padding: 6px 8px calc(6px + var(--safe-bottom));
@@ -129,16 +134,17 @@ main { max-width: 1280px; margin: 0 auto; padding: 12px var(--gutter); }
 .tabs .count { opacity: 0.6; font-size: 0.8em; margin-left: 2px; }
 
 .toolbar { display: flex; gap: 8px; margin: 8px 0 12px; }
-.toolbar input { flex: 1; }
+.toolbar input { flex: 1; min-width: 0; }
 .filters { display: flex; flex-wrap: wrap; gap: 10px 16px; padding: 12px; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 12px; }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(140px, calc(50% - 6px)), 1fr)); gap: 14px 12px; }
 @media (min-width: 760px) { .grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 20px 16px; } }
 
 .empty { text-align: center; padding: 48px 0; display: grid; gap: 12px; justify-items: center; }
 
 /* ───── cards ───── */
 .card { position: relative; min-width: 0; }
+.card-hit, .card-body { min-width: 0; }
 .card-hit { all: unset; display: block; cursor: pointer; width: 100%; }
 .card-hit:focus-visible { outline: 2px solid var(--accent); border-radius: var(--radius); }
 .card-poster { position: relative; aspect-ratio: 2 / 3; border-radius: var(--radius); overflow: hidden; background: var(--bg3); }
@@ -293,3 +299,18 @@ main { max-width: 1280px; margin: 0 auto; padding: 12px var(--gutter); }
 @media (min-width: 760px) { .toasts { bottom: 24px; } }
 .toast { background: var(--bg3); border: 1px solid var(--line); padding: 10px 14px; border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); animation: up 0.2s ease-out; }
 .toast.error { border-color: var(--danger); }
+
+/* ───── small screens: keep filter rows inside the viewport ───── */
+.theater-pick { margin: 4px 0 2px; max-width: 420px; }
+@media (max-width: 759px) {
+  .filters, .picker-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+  .filters label.inline, .picker-filters label.inline { display: grid; gap: 4px; font-size: 0.8rem; }
+  .filters label.inline select, .picker-filters label.inline select { width: 100%; }
+  .picker-filters .segmented, .picker-filters label.check { grid-column: span 2; }
+  .picker-filters label.check { grid-column: auto; }
+  .filters .btn.link { grid-column: span 2; justify-self: start; }
+  .pick-card { grid-template-columns: 96px 1fr; gap: 12px; padding: 12px; }
+  .detail-head { grid-template-columns: 96px 1fr; gap: 12px; }
+  .detail-head h2 { font-size: 1.1rem; overflow-wrap: anywhere; }
+  .prov-group { grid-template-columns: 44px 1fr; }
+}

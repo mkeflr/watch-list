@@ -159,6 +159,60 @@ async function omdbRatings(imdbId: string | null) {
   }
 }
 
+const today = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * TMDB's number_of_seasons / number_of_episodes include announced seasons.
+ * Count only what has aired, based on the last aired episode, and report the next season.
+ */
+function airedSeasons(d: Json) {
+  const now = today();
+  const list: Json[] = (d.seasons ?? []).filter((s: Json) => s.season_number > 0);
+  const last = d.last_episode_to_air;
+  let seasons = 0;
+  let episodes = 0;
+  if (last && last.season_number > 0) {
+    seasons = last.season_number;
+    episodes = list
+      .filter((s) => s.season_number < last.season_number)
+      .reduce((sum, s) => sum + (s.episode_count ?? 0), 0) + (last.episode_number ?? 0);
+  } else if (last) {
+    // Only specials have aired — fall back to seasons whose premiere is in the past.
+    const aired = list.filter((s) => s.air_date && s.air_date <= now);
+    seasons = aired.length;
+    episodes = aired.reduce((sum, s) => sum + (s.episode_count ?? 0), 0);
+  }
+  const next = list
+    .filter((s) => s.season_number > seasons)
+    .sort((a, b) => a.season_number - b.season_number)[0];
+  let next_season_date: string | null = next?.air_date || null;
+  const ne = d.next_episode_to_air;
+  if (next && ne && ne.season_number === next.season_number && ne.air_date) next_season_date = ne.air_date;
+  return {
+    seasons,
+    episodes,
+    next_season_number: next ? next.season_number : null,
+    next_season_date,
+  };
+}
+
+/** Earliest theatrical (premiere/limited/wide), else digital, else any release date per country. */
+function releaseDatesByCountry(results: Json[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of results) {
+    const dates: Json[] = r.release_dates ?? [];
+    const earliest = (types: number[] | null) =>
+      dates
+        .filter((x) => !types || types.includes(x.type))
+        .map((x) => String(x.release_date ?? "").slice(0, 10))
+        .filter(Boolean)
+        .sort()[0];
+    const date = earliest([2, 3]) ?? earliest([4]) ?? earliest(null);
+    if (date) out[r.iso_3166_1] = date;
+  }
+  return out;
+}
+
 async function details(media_type: MediaType, tmdb_id: number, countries: string[], home: string) {
   const extra = media_type === "movie" ? "release_dates" : "content_ratings";
   const d = await tmdb(`/${media_type}/${tmdb_id}`, {
@@ -171,19 +225,21 @@ async function details(media_type: MediaType, tmdb_id: number, countries: string
   let certification: string | null = null;
   let runtime_min: number | null = null;
   let release_date: string | null = null;
+  let release_dates: Record<string, string> = {};
+  let seasons: number | null = null;
+  let episodes: number | null = null;
+  let next_season_number: number | null = null;
+  let next_season_date: string | null = null;
 
   if (media_type === "movie") {
     runtime_min = d.runtime || null;
     release_date = d.release_date || null;
     const rel = d.release_dates?.results ?? [];
+    release_dates = releaseDatesByCountry(rel);
     const pick = rel.find((x: Json) => x.iso_3166_1 === home) ?? rel.find((x: Json) => x.iso_3166_1 === "US");
     certification = pick?.release_dates?.find((x: Json) => x.certification)?.certification ?? null;
-    // Prefer the home-country theatrical/digital date when it exists.
-    const homeDate = pick?.release_dates
-      ?.filter((x: Json) => [3, 4].includes(x.type))
-      ?.map((x: Json) => x.release_date?.slice(0, 10))
-      ?.sort()?.[0];
-    if (homeDate) release_date = homeDate;
+    // Default (fallback) date: the home country's, when TMDB has one.
+    if (release_dates[home]) release_date = release_dates[home];
   } else {
     runtime_min = d.episode_run_time?.[0] || d.last_episode_to_air?.runtime || d.next_episode_to_air?.runtime ||
       null;
@@ -191,6 +247,7 @@ async function details(media_type: MediaType, tmdb_id: number, countries: string
     const cr = d.content_ratings?.results ?? [];
     certification = (cr.find((x: Json) => x.iso_3166_1 === home) ?? cr.find((x: Json) => x.iso_3166_1 === "US"))
       ?.rating ?? null;
+    ({ seasons, episodes, next_season_number, next_season_date } = airedSeasons(d));
   }
 
   return {
@@ -209,10 +266,13 @@ async function details(media_type: MediaType, tmdb_id: number, countries: string
     ...ratings,
     certification,
     runtime_min,
-    seasons: media_type === "tv" ? d.number_of_seasons ?? null : null,
-    episodes: media_type === "tv" ? d.number_of_episodes ?? null : null,
+    seasons,
+    episodes,
+    next_season_number,
+    next_season_date,
     status_text: d.status ?? null,
     release_date,
+    release_dates,
     next_episode_date: d.next_episode_to_air?.air_date ?? null,
     providers: normalizeProviders(d["watch/providers"]?.results, countries),
   };
@@ -239,17 +299,20 @@ async function handle(body: Json, passcode: string) {
     }
 
     case "discover": {
-      const { home_country } = await getSettings();
+      const region = /^[A-Za-z]{2}$/.test(body.region ?? "")
+        ? String(body.region).toUpperCase()
+        : (await getSettings()).home_country;
       const [upcoming, nowPlaying, onAir, trending] = await Promise.all([
-        tmdb("/movie/upcoming", { region: home_country }),
-        tmdb("/movie/now_playing", { region: home_country }),
+        tmdb("/movie/upcoming", { region }),
+        tmdb("/movie/now_playing", { region }),
         tmdb("/tv/on_the_air"),
         tmdb("/trending/all/week"),
       ]);
-      const today = new Date().toISOString().slice(0, 10);
+      const now = today();
       return {
+        region,
         upcoming: (upcoming.results ?? [])
-          .filter((r: Json) => (r.release_date ?? "") >= today)
+          .filter((r: Json) => (r.release_date ?? "") >= now)
           .sort((a: Json, b: Json) => a.release_date.localeCompare(b.release_date))
           .map((r: Json) => summarize(r, "movie")),
         now_playing: (nowPlaying.results ?? []).map((r: Json) => summarize(r, "movie")),
